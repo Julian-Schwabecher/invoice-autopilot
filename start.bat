@@ -2,7 +2,7 @@
 rem Double-click launcher for Windows.
 cd /d "%~dp0"
 
-where uv >/dev/null 2>nul
+where uv >nul 2>nul
 if errorlevel 1 goto nouv
 goto run
 
@@ -16,7 +16,7 @@ if /i not "%ANSWER%"=="y" goto fail
 powershell -NoProfile -ExecutionPolicy ByPass -Command "irm https://astral.sh/uv/install.ps1 | iex"
 if errorlevel 1 goto fail
 set "PATH=%USERPROFILE%\.local\bin;%PATH%"
-where uv >/dev/null 2>nul
+where uv >nul 2>nul
 if errorlevel 1 goto installed
 goto run
 

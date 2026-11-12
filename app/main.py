@@ -1,20 +1,23 @@
+import json
 import logging
 import os
 import re
+import threading
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Annotated, Literal, Optional
 from urllib.parse import urlsplit
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, field_validator, model_validator
+from pydantic import BaseModel, StrictBool, field_validator, model_validator
+from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from . import ENV_PATH, ai, paypal
-from .errors import GENERIC, UserError, map_exception
+from . import ENV_PATH, ai, live, paypal
+from .errors import BAD_INVOICE_ID, GENERIC, REMIND_LIMIT, SANDBOX_ONLY, PayPalError, UserError, map_exception
 
 log = logging.getLogger("invoice_autopilot")
 STATIC = Path(__file__).resolve().parent.parent / "static"
@@ -145,6 +148,8 @@ class InvoiceIn(BaseModel):
     note: str = ""
     items: list[ItemIn]
     request_id: Optional[str] = None
+    deposit_percent: Optional[int] = None
+    late_fee_note: Optional[str] = None
 
     @field_validator("client_name", mode="before")
     @classmethod
@@ -211,6 +216,34 @@ class InvoiceIn(BaseModel):
             raise ValueError("Please check the form and try again.")
         return v
 
+    @field_validator("deposit_percent", mode="before")
+    @classmethod
+    def _deposit(cls, v):
+        bad = "A deposit must be a whole number between 10 and 90 percent."
+        if v is None or v == "":
+            return None
+        try:
+            if isinstance(v, bool) or float(v) != int(float(v)):
+                raise ValueError
+            n = int(float(v))
+        except (TypeError, ValueError, OverflowError):
+            raise ValueError(bad) from None
+        if not 10 <= n <= 90:
+            raise ValueError(bad)
+        return n
+
+    @field_validator("late_fee_note", mode="before")
+    @classmethod
+    def _late_fee(cls, v):
+        if v is None:
+            return None
+        if not isinstance(v, str):
+            raise ValueError("Please check the form and try again.")
+        v = re.sub(r"[\x00-\x08\x0b-\x1f\x7f]", " ", v).strip()
+        if len(v) > 300:
+            raise ValueError("The late fee note is too long. Keep it to 300 characters or fewer.")
+        return v or None
+
     @model_validator(mode="after")
     def _money(self):
         if self.currency in paypal.ZERO_DECIMAL:
@@ -226,6 +259,10 @@ class InvoiceIn(BaseModel):
             raise ValueError("The total is too large.")
         if total <= 0:
             raise ValueError("Add at least one item with a price above zero.")
+        if self.deposit_percent:
+            dep = paypal.deposit_amount(total, self.deposit_percent, self.currency)
+            if dep <= 0 or dep >= total:
+                raise ValueError("That total is too small to ask for a deposit.")
         return self
 
 
@@ -259,6 +296,10 @@ class RemindIn(BaseModel):
         return v
 
 
+class SafeModeIn(BaseModel):
+    enabled: StrictBool
+
+
 class SetupIn(BaseModel):
     paypal_client_id: Optional[str] = None
     paypal_client_secret: Optional[str] = None
@@ -270,7 +311,9 @@ class SetupIn(BaseModel):
 def _status() -> dict:
     pp = bool(os.environ.get("PAYPAL_CLIENT_ID", "").strip() and os.environ.get("PAYPAL_CLIENT_SECRET", "").strip())
     an = bool(os.environ.get("ANTHROPIC_API_KEY", "").strip())
-    return {"paypal_ready": pp, "anthropic_ready": an, "ready": pp and an, "sandbox": "sandbox" in paypal.BASE}
+    return {"paypal_ready": pp, "anthropic_ready": an, "ready": pp and an, "sandbox": paypal.is_sandbox(),
+            "safe_mode": live.safe_mode(),
+            "webhooks_ready": bool(os.environ.get("PAYPAL_WEBHOOK_ID", "").strip())}
 
 
 @app.get("/api/health")
@@ -298,10 +341,16 @@ def _is_local(request: Request) -> bool:
     return host in {"127.0.0.1", "::1", "localhost", "::ffff:127.0.0.1"} and _host_origin_ok(request)
 
 
+WEBHOOK_PATH = "/api/webhooks/paypal"
+
+
 @app.middleware("http")
 async def _only_this_computer(request: Request, call_next):
-    """Every /api route answers only to pages served from this computer (localhost)."""
-    if request.url.path.startswith("/api") and not _host_origin_ok(request):
+    """Every /api route answers only to pages served from this computer (localhost), except PayPal's webhook
+    address. PayPal calls that one from the internet, so it is protected by PayPal's signature check instead,
+    and nothing else is exempt."""
+    path = request.url.path
+    if path.startswith("/api") and path != WEBHOOK_PATH and not _host_origin_ok(request):
         return _err(403, "That isn't allowed here.")
     return await call_next(request)
 
@@ -369,15 +418,56 @@ def setup(request: Request, s: SetupIn):
 
 # ---------------------------------------------------------------- invoices
 
+_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
+def _check_id(inv_id: str) -> str:
+    """An invoice id goes into a PayPal address, so allow only the characters real ids have."""
+    if not _ID_RE.match(inv_id):
+        raise UserError(BAD_INVOICE_ID, 422)
+    return inv_id
+
+
+InvoiceId = Annotated[str, Depends(_check_id)]
+
+
 @app.post("/api/draft")
 def draft(t: Text):
     return _wrap(ai.draft_from_text, t.text)
 
 
+def _preview_send(d: dict) -> dict:
+    """What /api/send would do, said in plain English with the exact PayPal payload. Calls nothing."""
+    body, due_date = paypal.build_invoice_body(d)
+    cur = d["currency"]
+    total = paypal.money_str(paypal.invoice_total(d), cur)
+    dep = paypal.deposit_due(d)
+    says = [f"PayPal would email an invoice for {paypal.fmt_money(total, cur)} to {d['client_name']} "
+            f"at {d['client_email']}, " + (f"due on {ai.pretty_date(due_date)}." if due_date else "due on receipt.")]
+    if dep:
+        says.append(f"The client could pay a {d['deposit_percent']}% deposit of {paypal.fmt_money(dep, cur)} first.")
+    if d.get("late_fee_note"):
+        says.append(f'The invoice would state this under its terms: "{d["late_fee_note"]}"')
+    return {"ok": True, "preview": True, "kind": "send",
+            "message": "Safe mode is on, so nothing was sent. " + " ".join(says),
+            "payload": {"create_invoice": body, "send_invoice": dict(paypal.SEND_BODY)},
+            "invoice_id": None, "number": None, "status": "PREVIEW", "client_name": d["client_name"],
+            "client_email": d["client_email"], "currency": cur, "total": total, "due_date": due_date,
+            "view_url": None, "deposit_due": dep}
+
+
+def _send_one(inv: InvoiceIn) -> dict:
+    d = inv.model_dump()
+    if live.safe_mode():
+        return _preview_send(d)
+    res = _wrap(paypal.create_invoice, d)
+    live.log_send("send", res.get("invoice_id"), res.get("number"), res.get("client_name"))
+    return res
+
+
 @app.post("/api/send")
 def send(inv: InvoiceIn):
-    d = inv.model_dump()
-    return _wrap(paypal.create_invoice, d)
+    return _send_one(inv)
 
 
 @app.get("/api/invoices")
@@ -385,8 +475,34 @@ def invoices():
     return _wrap(paypal.list_invoices)
 
 
+@app.get("/api/invoices/{inv_id}/qr")
+def invoice_qr(inv_id: InvoiceId):
+    return {"image": _wrap(paypal.generate_qr, inv_id, context="qr")}
+
+
+def _preview_payment(inv_id: str) -> dict:
+    """What 'mark as paid' would do, in plain English with the exact PayPal payload. Reads the invoice, writes nothing."""
+    n, body = paypal.plan_payment(inv_id)
+    who = n["client_name"] or "your client"
+    which = f"invoice {n['number']}" if n["number"] else "the invoice"
+    amount = paypal.fmt_money(body["amount"]["value"], n["currency"])
+    return {"ok": True, "preview": True, "kind": "payment", "invoice_id": inv_id, "client_name": n["client_name"],
+            "message": (f"Safe mode is on, so nothing was sent. PayPal would record a practice payment of {amount} "
+                        f"from {who} on {which}, and PayPal would show it as paid."),
+            "payload": body}
+
+
+@app.post("/api/invoices/{inv_id}/record-test-payment")
+def record_test_payment(inv_id: InvoiceId):
+    """Practice only: pretend the client paid, so the page can show the status change. In safe mode it only
+    shows what it would do."""
+    if live.safe_mode():
+        return _wrap(_preview_payment, inv_id, context="record_payment")
+    return _wrap(paypal.record_payment, inv_id, context="record_payment")
+
+
 @app.post("/api/invoices/{inv_id}/draft-nudge")
-def draft_nudge(inv_id: str, req: Optional[NudgeReq] = None):
+def draft_nudge(inv_id: InvoiceId, req: Optional[NudgeReq] = None):
     req = req or NudgeReq()
 
     def go():
@@ -406,13 +522,170 @@ def draft_nudge(inv_id: str, req: Optional[NudgeReq] = None):
     return _wrap(go)
 
 
-@app.post("/api/invoices/{inv_id}/remind")
-def remind(inv_id: str, n: RemindIn):
+@app.get("/api/nudges")
+def nudges(refresh: bool = False):
+    """Every invoice that is waiting for payment, ranked by Claude (1 = chase first), each with a drafted
+    reminder. Nothing is sent: the person still approves each one, and sending goes through /remind."""
     def go():
-        email = paypal.normalize_invoice(paypal.get_invoice(inv_id))["client_email"] or None
+        rows = paypal.awaiting_payment(paypal.list_invoices()["invoices"])
+        items = []
+        for i, r in enumerate(rows, 1):
+            late, cur = paypal.days_overdue(r), r["currency"]
+            items.append({"ref": str(i), "number": r["number"], "client_name": r["client_name"], "currency": cur,
+                          "amount_raw": r["amount_due"], "amount_text": paypal.fmt_money(r["amount_due"], cur),
+                          "total_text": paypal.fmt_money(r["total"], cur), "due_date": r["due_date"],
+                          "days_overdue": late, "days_to_due": r["days_to_due"], "tone": ai.nudge_tone(late)})
+        drafts = ai.write_nudges(items, refresh=refresh)
+        out = []
+        for r, it, dr in zip(rows, items, drafts):
+            out.append({"invoice_id": r["id"], "number": r["number"], "client_name": r["client_name"],
+                        "total": r["total"], "amount_due": r["amount_due"], "currency": r["currency"],
+                        "days_overdue": it["days_overdue"], "tone": it["tone"], "priority": dr["priority"],
+                        "why": dr["why"], "subject": dr["subject"], "note": dr["note"],
+                        "drafted_by": dr["drafted_by"],
+                        "already_reminded_today": live.reminders_today(r["id"]) > 0})
+        out.sort(key=lambda n: n["priority"])
+        return out
+    return {"nudges": _wrap(go), "safe_mode": live.safe_mode()}
+
+
+@app.post("/api/invoices/{inv_id}/remind")
+def remind(inv_id: InvoiceId, n: RemindIn):
+    def go():
+        inv = paypal.normalize_invoice(paypal.get_invoice(inv_id))
+        if not inv["can_remind"]:
+            raise UserError("That invoice is already paid, cancelled or not sent yet, "
+                            "so there is nothing to remind anyone about.", 422)
+        if live.reminders_today(inv_id) >= 2:
+            raise UserError(REMIND_LIMIT, 422)
+        email = inv["client_email"] or None
+        if live.safe_mode():
+            who = inv["client_name"] or "your client"
+            return {"ok": True, "preview": True, "kind": "remind", "invoice_id": inv_id,
+                    "client_name": inv["client_name"], "client_email": email,
+                    "subject": n.subject, "note": n.note,
+                    "message": (f"Safe mode is on, so nothing was sent. PayPal would email {who}"
+                                f"{' at ' + email if email else ''} a reminder titled \"{n.subject}\"."),
+                    "payload": paypal.remind_body(n.subject, n.note)}
         paypal.remind(inv_id, n.subject, n.note)
-        return email
-    return {"ok": True, "client_email": _wrap(go, context="remind")}
+        live.log_send("remind", inv_id, inv["number"], inv["client_name"])
+        return {"ok": True, "client_email": email}
+    return _wrap(go, context="remind")
+
+
+# ---------------------------------------------------------------- demo data, safe mode, log, live events
+
+DEMO_EMAIL = "sb-wwhgs53882719@personal.example.com"
+_demo_lock = threading.Lock()
+_demo: dict = {"result": None}
+
+
+@app.post("/api/demo/seed")
+def demo_seed():
+    """Practice only: send one clearly-labelled demo invoice to the sandbox buyer. The first real result is
+    kept, so pressing it again (or two people pressing it) never makes a second invoice."""
+    if not paypal.is_sandbox():
+        raise UserError(SANDBOX_ONLY, 403)
+    with _demo_lock:
+        if _demo["result"] is not None:
+            return _demo["result"]
+        res = _send_one(InvoiceIn(
+            client_name="Demo Client", client_email=DEMO_EMAIL, currency="USD", due_days=14,
+            note="This is a demo invoice from Invoice Autopilot. It is practice only, no real money.",
+            items=[{"name": "Demo: logo design", "qty": 1, "unit_price": 120}], request_id="demo-seed"))
+        if not res.get("preview"):
+            _demo["result"] = res
+        return res
+
+
+@app.post("/api/safe-mode")
+def set_safe_mode(request: Request, s: SafeModeIn):
+    if not _is_local(request):
+        raise UserError("Safe mode can only be changed from the computer running this app.", 403)
+    return {"ok": True, "safe_mode": live.set_safe_mode(s.enabled)}
+
+
+@app.get("/api/log")
+def send_log():
+    return {"entries": live.get_log()}
+
+
+@app.get("/api/events")
+def events(since: Annotated[int, Query(ge=0)] = 0):
+    found, last = live.events_since(since)
+    return {"events": found, "last_seq": last}
+
+
+def _event_invoice_id(event: dict) -> str | None:
+    res = event.get("resource")
+    res = res if isinstance(res, dict) else {}
+    inner = res.get("invoice") if isinstance(res.get("invoice"), dict) else {}
+    found = inner.get("id") or res.get("id")
+    return found if isinstance(found, str) and _ID_RE.match(found) else None
+
+
+_WEBHOOK_HEADERS = ("paypal-auth-algo", "paypal-cert-url", "paypal-transmission-id",
+                    "paypal-transmission-sig", "paypal-transmission-time")
+WEBHOOK_MAX_BYTES = 256_000
+
+
+async def _read_limited(request: Request, limit: int) -> bytes | None:
+    """The request body, or None when it is bigger than `limit`. The size is checked BEFORE anything is read
+    (Content-Length) and again while reading (a chunked body has no Content-Length), so a huge upload is
+    dropped after `limit` bytes instead of being held in memory first."""
+    declared = request.headers.get("content-length")
+    if declared is not None:
+        try:
+            if int(declared) > limit:
+                return None
+        except ValueError:
+            return None
+    buf = bytearray()
+    async for chunk in request.stream():
+        buf += chunk
+        if len(buf) > limit:
+            return None
+    return bytes(buf)
+
+
+@app.post(WEBHOOK_PATH)
+async def paypal_webhook(request: Request):
+    """PayPal tells us an invoice changed. This address is open to the internet, so nothing is believed until
+    PayPal itself confirms the signature; unverified calls are rejected and never stored."""
+    webhook_id = os.environ.get("PAYPAL_WEBHOOK_ID", "").strip()
+    if not webhook_id:
+        return _err(503, "Webhooks aren't set up")
+    raw = await _read_limited(request, WEBHOOK_MAX_BYTES)
+    if raw is None:   # too big: answer without reading the rest, and close the connection so it is not kept
+        return JSONResponse({"message": "That notification is too big."}, status_code=413,
+                            headers={"Connection": "close"})
+    try:
+        event = json.loads(raw)
+    except ValueError:
+        event = None
+    if not isinstance(event, dict) or not all(request.headers.get(h) for h in _WEBHOOK_HEADERS):
+        return _err(400, "That doesn't look like a PayPal notification.")
+    if not live.allow_verify():
+        return _err(429, "Too many notifications right now. Please try again in a minute.")
+    try:
+        verified = await run_in_threadpool(paypal.verify_webhook, request.headers, event, webhook_id)
+    except PayPalError as e:
+        log.warning("PayPal could not check a webhook signature: HTTP %s", e.status)
+        if e.status in (400, 422):
+            return _err(400, "That notification could not be verified.")
+        return _err(503, "Couldn't check that notification right now. Please try again.")
+    except Exception as e:
+        log.warning("Webhook check failed: %s", type(e).__name__)
+        return _err(503, "Couldn't check that notification right now. Please try again.")
+    if not verified:
+        return _err(400, "That notification could not be verified.")
+    etype = str(event.get("event_type") or "")
+    if not etype.startswith("INVOICING.INVOICE."):
+        return {"ok": True, "stored": False}
+    when = event.get("create_time")
+    stored = live.add_event(event.get("id") if isinstance(event.get("id"), str) else None, etype,
+                            _event_invoice_id(event), when if isinstance(when, str) else None)
+    return {"ok": True, "stored": stored is not None}
 
 
 # ---------------------------------------------------------------- pages

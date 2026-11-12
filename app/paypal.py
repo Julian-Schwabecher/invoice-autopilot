@@ -1,4 +1,6 @@
 """Thin PayPal Invoicing v2 client (sandbox by default)."""
+import base64
+import binascii
 import datetime as dt
 import logging
 import os
@@ -9,7 +11,7 @@ from decimal import Decimal, ROUND_HALF_UP
 
 import httpx
 
-from .errors import NOT_CONNECTED, PayPalError, UserError
+from .errors import NOT_CONNECTED, SANDBOX_ONLY, PayPalError, UserError
 
 log = logging.getLogger("invoice_autopilot")
 
@@ -76,7 +78,16 @@ def _call(method: str, path: str, *, headers: dict | None = None, **kw):
     r = httpx.request(method, BASE + path, timeout=30, headers=h, **kw)
     if r.status_code >= 400:
         raise PayPalError(r.status_code, _body(r))
-    return r.json() if r.content else {}
+    if not r.content:
+        return {}
+    try:
+        return r.json()
+    except ValueError:  # not JSON (the QR code comes back as a multipart body)
+        return {"_raw": r.content, "_content_type": r.headers.get("content-type", "")}
+
+
+def is_sandbox() -> bool:
+    return "sandbox" in BASE
 
 
 # ---------------------------------------------------------------- money helpers
@@ -122,6 +133,21 @@ def invoice_total(d: dict) -> Decimal:
                 for i in d["items"]), Decimal("0"))
 
 
+def deposit_amount(total: Decimal, percent: int, cur: str) -> Decimal:
+    """The smallest first payment when a client may pay a deposit: percent of the total, rounded to the
+    currency's smallest unit (whole units for currencies with no cents)."""
+    q = Decimal("1") if cur in ZERO_DECIMAL else Decimal("0.01")
+    return (total * Decimal(int(percent)) / Decimal(100)).quantize(q, rounding=ROUND_HALF_UP)
+
+
+def deposit_due(d: dict) -> str | None:
+    pct = d.get("deposit_percent")
+    if not pct:
+        return None
+    cur = d.get("currency") or "USD"
+    return money_str(deposit_amount(invoice_total(d), pct, cur), cur)
+
+
 # ---------------------------------------------------------------- create / send
 
 _lock = threading.Lock()
@@ -145,27 +171,45 @@ def create_invoice(d: dict) -> dict:
         return res
 
 
-def _create(d: dict, paypal_key: str | None) -> dict:
+def build_invoice_body(d: dict, today: dt.date | None = None) -> tuple[dict, str | None]:
+    """The exact PayPal 'create invoice' payload for d, and the due date (None = due on receipt). Pure."""
     cur = d.get("currency") or "USD"
     due_days = d.get("due_days") or 0
-    today = dt.date.today()
+    today = today or dt.date.today()
     due_date = (today + dt.timedelta(days=int(due_days))).isoformat() if due_days > 0 else None
     term = ({"term_type": "DUE_ON_DATE_SPECIFIED", "due_date": due_date} if due_date
             else {"term_type": "DUE_ON_RECEIPT"})
+    detail = {"currency_code": cur, "note": d.get("note") or "", "payment_term": term}
+    late_fee_note = (d.get("late_fee_note") or "").strip()
+    if late_fee_note:  # PayPal never adds late fees by itself; this only states the terms on the invoice
+        detail["terms_and_conditions"] = late_fee_note
     body = {
-        "detail": {"currency_code": cur, "note": d.get("note") or "", "payment_term": term},
+        "detail": detail,
         "primary_recipients": [{"billing_info": {
             "name": split_name(d["client_name"]), "email_address": d["client_email"]}}],
         "items": [{"name": i["name"], "quantity": _qty_str(i["qty"]),
                    "unit_amount": {"currency_code": cur, "value": money_str(i["unit_price"], cur)}}
                   for i in d["items"]],
     }
+    dep = deposit_due(d)
+    if dep is not None:
+        body["configuration"] = {"partial_payment": {
+            "allow_partial_payment": True,
+            "minimum_amount_due": {"currency_code": cur, "value": dep}}}
+    return body, due_date
+
+
+SEND_BODY = {"send_to_recipient": True, "send_to_invoicer": False}
+
+
+def _create(d: dict, paypal_key: str | None) -> dict:
+    cur = d.get("currency") or "USD"
+    body, due_date = build_invoice_body(d)
     headers = {"PayPal-Request-Id": paypal_key} if paypal_key else None
     inv = _call("POST", "/v2/invoicing/invoices", json=body, headers=headers)
     inv_id = str(inv["href"]).rstrip("/").rsplit("/", 1)[-1]
     try:
-        _call("POST", f"/v2/invoicing/invoices/{inv_id}/send",
-              json={"send_to_recipient": True, "send_to_invoicer": False})
+        _call("POST", f"/v2/invoicing/invoices/{inv_id}/send", json=dict(SEND_BODY))
     except Exception:
         if d.get("request_id"):
             _attempts[d["request_id"]] = _attempts.get(d["request_id"], 0) + 1
@@ -176,7 +220,8 @@ def _create(d: dict, paypal_key: str | None) -> dict:
         raise
     result = {"ok": True, "invoice_id": inv_id, "number": None, "status": "SENT",
               "client_name": d["client_name"], "client_email": d["client_email"], "currency": cur,
-              "total": money_str(invoice_total(d), cur), "due_date": due_date, "view_url": None}
+              "total": money_str(invoice_total(d), cur), "due_date": due_date, "view_url": None,
+              "deposit_due": deposit_due(d)}
     try:
         got = get_invoice(inv_id)
         n = normalize_invoice(got)
@@ -256,6 +301,9 @@ def normalize_invoice(inv: dict, today: dt.date | None = None) -> dict:
     days = (due - today).days if due else None
     created = _date(_g(inv, "detail", "metadata", "create_time")) or _date(_g(inv, "detail", "invoice_date"))
     late = days is not None and days < 0
+    dep = _g(inv, "configuration", "partial_payment", "minimum_amount_due", "value")
+    deposit = (money_str(dep, cur) if dep is not None
+               and _g(inv, "configuration", "partial_payment", "allow_partial_payment") is True else None)
 
     def overdue_label():
         n = -days
@@ -292,6 +340,7 @@ def normalize_invoice(inv: dict, today: dt.date | None = None) -> dict:
         "created": created.isoformat() if created else None,
         "due_date": due.isoformat() if due else None,
         "days_to_due": days, "status": status, "label": label, "kind": kind,
+        "deposit_due": deposit,
         "can_remind": status in ("SENT", "UNPAID", "PARTIALLY_PAID"),
         "view_url": _view_url(inv),
     }
@@ -322,6 +371,157 @@ def list_invoices() -> dict:
     return {"invoices": rows, "shown": len(rows), "total": total if isinstance(total, int) else len(rows)}
 
 
+def days_overdue(row: dict) -> int:
+    """Whole days past the due date for a normalized row (0 when not late or when there is no due date)."""
+    d = row.get("days_to_due")
+    return max(0, -d) if isinstance(d, int) else 0
+
+
+def awaiting_payment(rows: list[dict]) -> list[dict]:
+    """The rows where a reminder makes sense (sent, not paid, not cancelled, not a draft, and something still
+    owed), most overdue first, then soonest due. Pure."""
+    keep = [r for r in rows if r.get("can_remind") and r.get("kind") in ("overdue", "waiting", "partial")
+            and (_dec(r.get("amount_due")) or Decimal("0")) > 0]
+    return sorted(keep, key=lambda r: (-days_overdue(r), r.get("due_date") or "9999-12-31"))
+
+
+def remind_body(subject: str, note: str) -> dict:
+    return {"subject": subject, "note": note, "send_to_invoicer": False}
+
+
 def remind(inv_id: str, subject: str, note: str):
-    _call("POST", f"/v2/invoicing/invoices/{inv_id}/remind",
-          json={"subject": subject, "note": note, "send_to_invoicer": False})
+    _call("POST", f"/v2/invoicing/invoices/{inv_id}/remind", json=remind_body(subject, note))
+
+
+# ---------------------------------------------------------------- practice payment (sandbox only)
+
+_NOT_PAYABLE = {
+    "PAID": "That invoice is already paid, so there is nothing left to mark as paid.",
+    "MARKED_AS_PAID": "That invoice is already paid, so there is nothing left to mark as paid.",
+    "DRAFT": "That invoice hasn't been sent yet, so it can't be marked as paid.",
+    "SCHEDULED": "That invoice hasn't been sent yet, so it can't be marked as paid.",
+    "CANCELLED": "That invoice was cancelled, so it can't be marked as paid.",
+}
+
+
+def _payment_date(inv: dict) -> str:
+    """Today, as early as any time zone has it, so PayPal never sees a date in the future. Never before
+    the invoice's own date."""
+    day = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=12)).date()
+    inv_day = _date(_g(inv, "detail", "invoice_date"))
+    return max(day, inv_day).isoformat() if inv_day else day.isoformat()
+
+
+def plan_payment(inv_id: str) -> tuple[dict, dict]:
+    """Practice only: what 'mark as paid' would send, as (normalized invoice, PayPal payments body): the whole
+    amount still owed, as cash. Reads the invoice but changes nothing. Refuses outside PayPal's sandbox, and when
+    the invoice cannot be paid or has nothing left to pay."""
+    if not is_sandbox():
+        raise UserError(SANDBOX_ONLY, 403)
+    got = get_invoice(inv_id)
+    n = normalize_invoice(got)
+    if n["status"] in _NOT_PAYABLE:
+        raise UserError(_NOT_PAYABLE[n["status"]], 422)
+    if n["status"] not in ("SENT", "UNPAID", "PARTIALLY_PAID"):
+        raise UserError("PayPal doesn't let you mark that invoice as paid right now.", 422)
+    owed = _dec(n["amount_due"]) or Decimal("0")
+    if owed <= 0:
+        raise UserError(_NOT_PAYABLE["PAID"], 422)
+    cur = n["currency"]
+    body = {"method": "CASH", "payment_date": _payment_date(got),
+            "amount": {"currency_code": cur, "value": money_str(owed, cur)}, "note": "Marked paid for demo"}
+    return n, body
+
+
+def record_payment(inv_id: str) -> dict:
+    """Practice only: mark the whole amount still owed as paid (cash), as if the client had paid."""
+    n, body = plan_payment(inv_id)
+    cur, value = n["currency"], body["amount"]["value"]
+    pay = _call("POST", f"/v2/invoicing/invoices/{inv_id}/payments", json=body)
+    result = {"ok": True, "invoice_id": inv_id, "payment_id": (pay or {}).get("payment_id"),
+              "amount_paid": value, "currency": cur, "status": "MARKED_AS_PAID", "invoice": None}
+    try:
+        after = get_invoice(inv_id)
+        result["status"] = after.get("status") or "MARKED_AS_PAID"
+        result["invoice"] = normalize_invoice(after)
+    except Exception:
+        log.exception("Payment on %s was recorded but reading the invoice back failed", inv_id)
+    return result
+
+
+# ---------------------------------------------------------------- QR code
+
+_PNG = b"\x89PNG\r\n\x1a\n"
+
+
+def _png_from(blob: bytes) -> bytes | None:
+    """PNG bytes from raw PNG, base64 text, or a data: URL. None if it is none of those."""
+    blob = blob.strip()
+    if blob.startswith(_PNG):
+        return blob
+    text = blob.decode("ascii", "ignore")
+    if text.startswith("data:") and "," in text:
+        text = text.split(",", 1)[1]
+    try:
+        data = base64.b64decode("".join(text.split()), validate=True)
+    except (binascii.Error, ValueError):
+        return None
+    return data if data.startswith(_PNG) else None
+
+
+def qr_image(resp) -> str | None:
+    """Turn whatever PayPal's QR endpoint returned into a 'data:image/png;base64,...' string, or None.
+    Live sandbox answers with a multipart body whose 'image' part is base64 text; plain PNG bytes, a bare
+    base64 string and a JSON field are accepted too."""
+    raw, ctype = None, ""
+    if isinstance(resp, dict) and isinstance(resp.get("_raw"), (bytes, bytearray)):
+        raw, ctype = bytes(resp["_raw"]), str(resp.get("_content_type") or "")
+    elif isinstance(resp, (bytes, bytearray)):
+        raw = bytes(resp)
+    elif isinstance(resp, str):
+        raw = resp.encode("utf-8", "ignore")
+    elif isinstance(resp, dict):
+        for k in ("image", "qr_code", "qr"):
+            if isinstance(resp.get(k), str):
+                raw = resp[k].encode("utf-8", "ignore")
+                break
+    if not raw:
+        return None
+    candidates = [raw]
+    m = re.search(r'boundary="?([^";\s]+)"?', ctype)
+    if m or raw.startswith(b"--"):
+        boundary = (m.group(1).encode() if m else raw.split(b"\r\n", 1)[0][2:])
+        candidates = []
+        for part in raw.split(b"--" + boundary):
+            head, sep, body = part.partition(b"\r\n\r\n")
+            if sep and body.strip(b"\r\n- "):
+                candidates.append(body.rstrip(b"\r\n"))
+    for c in candidates:
+        png = _png_from(c)
+        if png:
+            return "data:image/png;base64," + base64.b64encode(png).decode("ascii")
+    return None
+
+
+def generate_qr(inv_id: str) -> str:
+    """A 'data:image/png;base64,...' QR code that opens the invoice's payment page. Needs a sent invoice."""
+    resp = _call("POST", f"/v2/invoicing/invoices/{inv_id}/generate-qr-code", json={"width": 300, "height": 300})
+    image = qr_image(resp)
+    if not image:
+        log.error("QR response for %s was not a PNG", inv_id)
+        raise UserError("PayPal sent back a QR code we couldn't read. Please try again.", 502)
+    return image
+
+
+# ---------------------------------------------------------------- webhooks
+
+def verify_webhook(headers, event: dict, webhook_id: str) -> bool:
+    """Ask PayPal whether this notification really came from PayPal. headers: the request headers."""
+    h = {str(k).lower(): v for k, v in headers.items()}
+    body = {"auth_algo": h.get("paypal-auth-algo"), "cert_url": h.get("paypal-cert-url"),
+            "transmission_id": h.get("paypal-transmission-id"),
+            "transmission_sig": h.get("paypal-transmission-sig"),
+            "transmission_time": h.get("paypal-transmission-time"),
+            "webhook_id": webhook_id, "webhook_event": event}
+    r = _call("POST", "/v1/notifications/verify-webhook-signature", json=body)
+    return isinstance(r, dict) and r.get("verification_status") == "SUCCESS"

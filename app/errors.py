@@ -22,6 +22,10 @@ CLAUDE_REJECT = "Claude couldn't handle that request. Try a shorter or simpler n
 CLAUDE_DOWN = "Couldn't reach Claude. Check your internet and try again."
 NO_INVOICE = "I couldn't find an invoice in that note. Try adding who it's for, what you did and the price."
 GENERIC = "Something went wrong on our side. Nothing was sent. Please try again."
+SANDBOX_ONLY = "That only works in PayPal's practice (sandbox) mode, so it was not done."
+BAD_INVOICE_ID = "That invoice link doesn't look right."
+REMIND_LIMIT = ("To stay within PayPal's daily reminder limit, this app sends at most two reminders for the same "
+                "invoice in one day, and you've already sent two today. Try again tomorrow.")
 
 
 class UserError(Exception):
@@ -71,7 +75,13 @@ def map_exception(e: Exception, context: str | None = None) -> tuple[int, str]:
             return 422, "PayPal couldn't find that invoice."
         if s in (400, 422):
             if context == "remind":
-                return 422, "PayPal wouldn't send that reminder. The invoice may already be paid or cancelled."
+                return 422, ("PayPal wouldn't send that reminder. The invoice may already be paid or cancelled, "
+                             "or you may have already sent two reminders for it today (PayPal documents a limit of two a day).")
+            if context == "record_payment":
+                return 422, ("PayPal wouldn't record that practice payment. "
+                             "The invoice may already be paid, cancelled or not sent yet.")
+            if context == "qr":
+                return 422, "PayPal couldn't make a QR code for that invoice. It may not have been sent yet."
             return 422, PAYPAL_EMAIL if "email" in e.fields() else PAYPAL_REJECT
         if s == 403:
             return 502, "PayPal didn't allow that. Check that Invoicing is turned on for your PayPal app."
