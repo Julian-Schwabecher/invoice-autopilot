@@ -1,0 +1,38 @@
+<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
+<title>Invoice Autopilot</title>
+<style>
+:root{--bg:#fff;--fg:#1a1a1a;--mut:#667;--card:#f5f6f8;--ac:#0070e0}
+@media(prefers-color-scheme:dark){:root{--bg:#14161a;--fg:#eee;--mut:#99a;--card:#1e2127}}
+body{font:16px system-ui;background:var(--bg);color:var(--fg);max-width:760px;margin:0 auto;padding:16px}
+textarea,input{width:100%;box-sizing:border-box;font:inherit;padding:8px;border-radius:6px;border:1px solid #8884;background:var(--card);color:var(--fg)}
+button{font:inherit;background:var(--ac);color:#fff;border:0;border-radius:6px;padding:8px 14px;cursor:pointer;margin:6px 6px 6px 0}
+.card{background:var(--card);border-radius:8px;padding:12px;margin:10px 0}.mut{color:var(--mut);font-size:14px}
+</style>
+<h1>Invoice Autopilot</h1>
+<p class=mut>Paste a messy note. Claude drafts the invoice, PayPal sends it, and Claude chases it if it goes late.</p>
+<textarea id=t rows=4>Finished the logo + brand guide for Maya Chen (maya@example.com): 1 logo at $450, 2 revision rounds at $75 each. Net 15.</textarea>
+<button onclick=draft()>Draft with Claude</button>
+<div id=d></div>
+<h2>Invoices <button onclick=load()>Refresh</button></h2><div id=l></div>
+<script>
+let cur=null;const $=id=>document.getElementById(id);
+const api=async(u,b)=>{const r=await fetch(u,b&&{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b)});
+ const j=await r.json();if(!r.ok)throw new Error(j.detail||r.status);return j};
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+async function draft(){$('d').innerHTML='<p class=mut>Thinking…</p>';
+ try{cur=await api('/api/draft',{text:$('t').value});
+  const tot=cur.items.reduce((a,i)=>a+i.qty*i.unit_price,0);
+  $('d').innerHTML=`<div class=card><b>${esc(cur.client_name)}</b> &lt;${esc(cur.client_email)}&gt; · due ${cur.due_days||'on receipt'}d<br>`+
+   cur.items.map(i=>`${esc(i.name)} — ${i.qty} × ${i.unit_price}`).join('<br>')+`<br><b>Total ${tot.toFixed(2)} ${esc(cur.currency||'USD')}</b>`+
+   (cur.missing?.length?`<p style=color:#c60>Missing: ${esc(cur.missing.join(', '))}</p>`:'')+
+   `<br><button onclick=send()>Send via PayPal</button></div>`}catch(e){$('d').textContent=e.message}}
+async function send(){try{const r=await api('/api/send',cur);$('d').innerHTML='<div class=card>Sent ✓ '+esc(r.id)+'</div>';load()}catch(e){alert(e.message)}}
+async function load(){try{const r=await api('/api/invoices');$('l').innerHTML=r.map(i=>`<div class=card><b>${esc(i.detail.invoice_number)}</b> ${esc(i.status)} · ${esc(i.amount?.value)} ${esc(i.amount?.currency_code)}
+ <div class=mut>${esc(i.primary_recipients?.[0]?.billing_info?.email_address)}</div>
+ ${['SENT','UNPAID','PARTIALLY_PAID'].includes(i.status)?`<button onclick="nudge('${esc(i.id)}')">AI reminder</button>`:''}<div id="n${esc(i.id)}"></div></div>`).join('')||'<p class=mut>None yet.</p>'}catch(e){$('l').textContent=e.message}}
+async function nudge(id){const el=$('n'+id);el.textContent='Writing…';
+ try{const n=await api(`/api/invoices/${id}/draft-nudge`,{});
+  el.innerHTML=`<p class=mut>${n.days_overdue} days overdue</p><input id=s${id} value="${esc(n.subject)}"><textarea id=b${id} rows=4>${esc(n.note)}</textarea><button onclick="rem('${id}')">Send reminder</button>`}catch(e){el.textContent=e.message}}
+async function rem(id){try{await api(`/api/invoices/${id}/remind`,{subject:$('s'+id).value,note:$('b'+id).value});$('n'+id).textContent='Reminder sent ✓'}catch(e){alert(e.message)}}
+load();
+</script>
