@@ -1,38 +1,796 @@
-<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
 <title>Invoice Autopilot</title>
 <style>
-:root{--bg:#fff;--fg:#1a1a1a;--mut:#667;--card:#f5f6f8;--ac:#0070e0}
-@media(prefers-color-scheme:dark){:root{--bg:#14161a;--fg:#eee;--mut:#99a;--card:#1e2127}}
-body{font:16px system-ui;background:var(--bg);color:var(--fg);max-width:760px;margin:0 auto;padding:16px}
-textarea,input{width:100%;box-sizing:border-box;font:inherit;padding:8px;border-radius:6px;border:1px solid #8884;background:var(--card);color:var(--fg)}
-button{font:inherit;background:var(--ac);color:#fff;border:0;border-radius:6px;padding:8px 14px;cursor:pointer;margin:6px 6px 6px 0}
-.card{background:var(--card);border-radius:8px;padding:12px;margin:10px 0}.mut{color:var(--mut);font-size:14px}
+:root{
+  --bg:#ffffff;--fg:#1a1d23;--mut:#505a68;--card:#f4f6f9;--inp:#ffffff;--bd:#727b89;--soft:#d5dae2;
+  --ac:#0b5fcc;--ac-fg:#ffffff;
+  --ok-bg:#e6f5ea;--ok-fg:#14602a;--ok-bd:#2f8a4a;
+  --err-bg:#fdeceb;--err-fg:#9b1c1c;--err-bd:#c93a3a;
+  --warn-bg:#fff3de;--warn-fg:#8a4500;--warn-bd:#b8650a;
+  --info-bg:#e8f0fc;--info-fg:#0d4aa0;
+  --grey-bg:#e9ecf1;--grey-fg:#3a4350;
+}
+@media(prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --bg:#14161a;--fg:#eceef2;--mut:#a9b1bf;--card:#1e2127;--inp:#14161a;--bd:#8b94a4;--soft:#343944;
+    --ac:#5aa9ff;--ac-fg:#07111f;
+    --ok-bg:#16301e;--ok-fg:#7fdc9a;--ok-bd:#3f9d5c;
+    --err-bg:#3a1c1c;--err-fg:#ff9b9b;--err-bd:#d05a5a;
+    --warn-bg:#35270f;--warn-fg:#ffb066;--warn-bd:#c98530;
+    --info-bg:#172a45;--info-fg:#9cc8ff;
+    --grey-bg:#2b3039;--grey-fg:#c5ccd8;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#14161a;--fg:#eceef2;--mut:#a9b1bf;--card:#1e2127;--inp:#14161a;--bd:#8b94a4;--soft:#343944;
+  --ac:#5aa9ff;--ac-fg:#07111f;
+  --ok-bg:#16301e;--ok-fg:#7fdc9a;--ok-bd:#3f9d5c;
+  --err-bg:#3a1c1c;--err-fg:#ff9b9b;--err-bd:#d05a5a;
+  --warn-bg:#35270f;--warn-fg:#ffb066;--warn-bd:#c98530;
+  --info-bg:#172a45;--info-fg:#9cc8ff;
+  --grey-bg:#2b3039;--grey-fg:#c5ccd8;
+}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;font:17px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--fg)}
+main{max-width:780px;margin:0 auto;padding:16px 16px 8px}
+h1{font-size:2rem;line-height:1.15;margin:.2em 0 .3em}
+h2{font-size:1.35rem;margin:0 0 .4em}
+h3{font-size:1.05rem;margin:1.2em 0 .4em}
+p{margin:.4em 0}
+a{color:var(--ac)}
+.brand{font-weight:700;letter-spacing:.01em;color:var(--mut);font-size:.95rem;margin-top:8px}
+.mut{color:var(--mut)}.small{font-size:.9rem}
+:focus-visible{outline:3px solid var(--ac);outline-offset:2px}
+.sr{position:absolute!important;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+
+.card{background:var(--card);border-radius:10px;padding:16px;margin:14px 0;overflow-wrap:anywhere;min-width:0}
+.card .card{background:var(--bg)}
+
+label{display:block;font-weight:600;margin:0 0 4px}
+input,select,textarea{width:100%;min-height:44px;font:inherit;padding:8px 10px;border-radius:8px;border:2px solid var(--bd);background:var(--inp);color:var(--fg)}
+textarea{resize:vertical;min-height:96px}
+input[aria-invalid="true"]{border-color:var(--err-bd);background:var(--err-bg)}
+fieldset{border:0;padding:0;margin:0;min-width:0}
+fieldset:disabled{opacity:.7}
+.field{margin:12px 0;min-width:0}
+.hint{color:var(--mut);font-size:.92rem;margin:4px 0 0}
+.hint.bad{color:var(--err-fg);font-weight:600}
+
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:44px;padding:8px 18px;font:inherit;font-weight:600;color:var(--ac-fg);background:var(--ac);border:2px solid var(--ac);border-radius:8px;cursor:pointer;margin:6px 8px 6px 0;text-decoration:none}
+.btn:hover:not(:disabled){filter:brightness(1.08)}
+.btn:disabled{opacity:.55;cursor:not-allowed}
+.btn.sec{background:transparent;color:var(--ac);border-color:var(--ac)}
+.linkbtn{min-height:44px;padding:4px 6px;font:inherit;color:var(--ac);background:none;border:0;text-decoration:underline;cursor:pointer}
+.actions{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px}
+.reason{color:var(--warn-fg);font-weight:600}
+.reason:not(:empty)::before{content:"\0026A0\0000a0Check:\0000a0"}
+
+.banner{margin:0;padding:10px 16px;background:var(--info-bg);color:var(--info-fg);text-align:center;font-size:.95rem;overflow-wrap:anywhere}
+.banner.live{background:var(--warn-bg);color:var(--warn-fg)}
+
+.steps{display:flex;gap:6px;list-style:none;padding:0;margin:14px 0 6px}
+.steps li{flex:1;min-width:0;display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:8px;border:2px solid var(--soft);color:var(--mut);font-weight:600;font-size:.95rem}
+.steps li .n{flex:none;width:26px;height:26px;border-radius:50%;display:grid;place-items:center;border:2px solid currentColor;font-size:.85rem}
+.steps li[aria-current="step"]{border-color:var(--ac);color:var(--fg);background:var(--card)}
+.steps li[aria-current="step"] .n{background:var(--ac);border-color:var(--ac);color:var(--ac-fg)}
+.steps li.done .n{background:var(--ok-fg);border-color:var(--ok-fg);color:var(--bg)}
+
+.err{display:flex;gap:10px;align-items:flex-start;background:var(--err-bg);color:var(--err-fg);border:2px solid var(--err-bd);border-radius:8px;padding:10px 12px;margin:10px 0}
+.err .ic{flex:none;font-weight:700}
+.err p{margin:0;font-weight:600}
+.err .btn{margin:8px 0 0;min-height:40px;color:var(--err-fg);border-color:var(--err-fg)}
+.okbox{background:var(--ok-bg);color:var(--ok-fg);border:2px solid var(--ok-bd);border-radius:10px;padding:14px 16px;margin:14px 0}
+.okbox h2{margin-top:0}
+.okbox a,.okbox .btn.sec{color:var(--ok-fg);border-color:var(--ok-fg)}
+.warnbox{background:var(--warn-bg);color:var(--warn-fg);border:2px solid var(--warn-bd);border-radius:10px;padding:12px 16px;margin:12px 0}
+.warnbox h3{margin:0 0 6px;display:flex;gap:8px}
+.warnbox ul{margin:0;padding-left:1.2em}
+.warnbox li{margin:3px 0}
+
+.spin{display:inline-block;width:1em;height:1em;border:3px solid var(--soft);border-top-color:var(--ac);border-radius:50%;vertical-align:-.15em;margin-right:8px;animation:sp .8s linear infinite}
+@keyframes sp{to{transform:rotate(360deg)}}
+@media(prefers-reduced-motion:reduce){.spin{animation:none;border-top-color:var(--soft);border-right-color:var(--ac)}*{scroll-behavior:auto!important}}
+
+ol.how{padding-left:1.4em;margin:.5em 0}
+ol.how li{margin:5px 0}
+
+.item{position:relative;display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:10px 0;border-top:1px solid var(--soft)}
+.item .c-name{grid-column:1/-1}
+.item .c-end{grid-column:1/-1;display:flex;justify-content:space-between;align-items:center;gap:8px}
+.item .lt{font-weight:700;overflow-wrap:anywhere}
+.item .field{margin:0}
+.item .btn{margin:0;min-height:44px;white-space:nowrap;flex:none}
+@media(min-width:640px){
+  .item{grid-template-columns:minmax(0,1fr) 90px 120px 110px auto;align-items:end}
+  .item .c-name{grid-column:auto}
+  .item .c-end{display:contents}
+  .item .lt{align-self:center;text-align:right;padding-bottom:0}
+  .item:not(:first-child) label{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+  .item .lt-wrap .lbl{display:none}
+}
+.item .lt-wrap .lbl{color:var(--mut);font-weight:400;margin-right:6px}
+.cols2{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
+.total{display:flex;justify-content:space-between;gap:12px;font-size:1.2rem;padding:12px 0;border-top:2px solid var(--soft);margin-top:6px}
+.confirm{border:2px solid var(--ac);border-radius:10px;padding:14px;margin:14px 0;background:var(--bg)}
+.confirm p{margin:.3em 0}
+
+.group h3{margin:1.4em 0 .2em}
+.inv{background:var(--card);border-radius:10px;padding:12px 14px;margin:10px 0;overflow-wrap:anywhere;min-width:0}
+.inv-top{display:flex;flex-wrap:wrap;justify-content:space-between;gap:6px 10px;align-items:center}
+.inv .client{font-size:1.1rem}
+.inv .amt{font-size:1.15rem;font-weight:700;margin-top:2px}
+.pill{display:inline-flex;gap:6px;align-items:center;padding:2px 10px;border-radius:999px;font-size:.9rem;font-weight:600;border:2px solid currentColor}
+.k-waiting{background:var(--info-bg);color:var(--info-fg)}
+.k-overdue{background:var(--err-bg);color:var(--err-fg)}
+.k-partial{background:var(--warn-bg);color:var(--warn-fg)}
+.k-paid{background:var(--ok-bg);color:var(--ok-fg)}
+.k-draft,.k-other,.k-cancelled,.k-refunded{background:var(--grey-bg);color:var(--grey-fg)}
+.inv .meta{display:flex;flex-wrap:wrap;gap:2px 14px;align-items:center}
+.nudge{margin-top:10px}
+.nudge .panel{background:var(--bg);border:2px solid var(--soft);border-radius:10px;padding:12px 14px}
+.nudge h4{margin:0 0 4px;font-size:1.02rem}
+.toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:4px 12px}
+.toolbar .btn{margin-left:0}
+footer{max-width:780px;margin:18px auto 24px;padding:14px 16px 0;border-top:1px solid var(--soft);color:var(--mut);font-size:.92rem}
+
+@media(max-width:480px){
+  body{font-size:16px}
+  h1{font-size:1.65rem}
+  .btn{width:100%;margin-right:0}
+  .item .btn{width:auto}
+  .steps li{padding:6px 4px;gap:4px;font-size:.78rem}
+  .steps li .n{width:22px;height:22px;font-size:.75rem}
+}
 </style>
-<h1>Invoice Autopilot</h1>
-<p class=mut>Paste a messy note. Claude drafts the invoice, PayPal sends it, and Claude chases it if it goes late.</p>
-<textarea id=t rows=4>Finished the logo + brand guide for Maya Chen (sb-wwhgs53882719@personal.example.com): 1 logo at $450, 2 revision rounds at $75 each. Net 15.</textarea>
-<button onclick=draft()>Draft with Claude</button>
-<div id=d></div>
-<h2>Invoices <button onclick=load()>Refresh</button></h2><div id=l></div>
+</head>
+<body>
+
+<div id="mode" class="banner" hidden role="note"></div>
+
+<main id="main">
+  <div class="brand">Invoice Autopilot</div>
+  <div id="bootmsg" role="status" aria-live="polite"><p class="mut"><span class="spin" aria-hidden="true"></span>Starting up...</p></div>
+  <div id="booterr" aria-live="polite"></div>
+
+  <!-- Setup -->
+  <section id="setup" hidden aria-labelledby="setuph">
+    <h1 id="setuph">Let's connect two things</h1>
+    <p class="mut">This takes about 10 minutes, once. After that you just type what you did and get an invoice.</p>
+    <p class="mut" id="setupnote"></p>
+    <form id="setupform" novalidate>
+      <div class="card" id="pp-step">
+        <h2>Step 1 of 2: connect PayPal (free practice account)</h2>
+        <ol class="how">
+          <li>Go to <a href="https://developer.paypal.com" target="_blank" rel="noopener">developer.paypal.com</a> and log in with your PayPal login.</li>
+          <li>Click <b>Apps &amp; Credentials</b>.</li>
+          <li>Make sure <b>Sandbox</b> is selected at the top (not Live).</li>
+          <li>Click <b>Create App</b>, type any name, and click <b>Create App</b> again.</li>
+          <li>Copy the <b>Client ID</b>, and the <b>Secret</b> (click Show), and paste them below.</li>
+        </ol>
+        <div class="field"><label for="s-id">PayPal Client ID</label><input id="s-id" type="password" autocomplete="off" spellcheck="false"></div>
+        <div class="field"><label for="s-secret">PayPal Secret</label><input id="s-secret" type="password" autocomplete="off" spellcheck="false"></div>
+      </div>
+      <div class="card" id="ai-step">
+        <h2>Step 2 of 2: connect Claude</h2>
+        <ol class="how">
+          <li>Go to <a href="https://console.anthropic.com" target="_blank" rel="noopener">console.anthropic.com</a> and sign in (or make a free account).</li>
+          <li>Click <b>API Keys</b>, then <b>Create Key</b>.</li>
+          <li>Copy the key and paste it below. If it asks for billing, add a few dollars of credit. This app uses a few cents.</li>
+        </ol>
+        <div class="field"><label for="s-key">Claude key</label><input id="s-key" type="password" autocomplete="off" spellcheck="false"></div>
+      </div>
+      <div class="actions">
+        <button type="submit" class="btn" id="setupgo">Save and check</button>
+        <button type="button" class="btn sec" id="setupcancel" hidden>Cancel</button>
+      </div>
+      <p class="hint">Your keys are saved only on this computer.</p>
+      <div id="setupmsg" aria-live="polite"></div>
+    </form>
+  </section>
+
+  <!-- App -->
+  <section id="home" hidden>
+    <header>
+      <h1>Get paid faster</h1>
+      <p class="mut">Tell us who you worked for and what you charged, in your own words. We'll turn it into an invoice, you check it, then PayPal emails it to your client.</p>
+      <ol class="steps" id="steps" aria-label="Progress">
+        <li data-s="1" aria-current="step"><span class="n" aria-hidden="true">1</span>Describe</li>
+        <li data-s="2"><span class="n" aria-hidden="true">2</span>Check</li>
+        <li data-s="3"><span class="n" aria-hidden="true">3</span>Send</li>
+      </ol>
+    </header>
+
+    <!-- Step 1 -->
+    <section id="s1" class="card" aria-labelledby="s1h">
+      <h2 class="sr" id="s1h">Step 1: describe the job</h2>
+      <label for="note">What did you do, and who for?</label>
+      <textarea id="note" rows="5" maxlength="4500" placeholder="e.g. Fixed the website for Sam Lee (sam@example.com): 3 hours at $50. Payment due in 14 days."></textarea>
+      <p class="hint" id="notehint" aria-live="polite"></p>
+      <div class="actions">
+        <button type="button" class="btn" id="make">Create my invoice</button>
+        <button type="button" class="btn sec" id="example">Try an example</button>
+      </div>
+      <div id="prog" class="mut" role="status" aria-live="polite"></div>
+      <div id="s1err" aria-live="polite"></div>
+    </section>
+
+    <!-- Step 2 -->
+    <section id="review" class="card" hidden aria-labelledby="rvh">
+      <h2 id="rvh" tabindex="-1">Check your invoice</h2>
+      <p class="mut">Here's what we understood. Change anything that's wrong, then review and send.</p>
+      <div id="qbox"></div>
+      <form id="rvform" novalidate>
+        <fieldset id="rvfs">
+          <legend class="sr">Invoice details</legend>
+          <div class="field"><label for="f-name">Who is this for?</label><input id="f-name" autocomplete="off" maxlength="100"></div>
+          <div class="field">
+            <label for="f-email">Their email</label>
+            <input id="f-email" type="email" required autocomplete="off" aria-describedby="f-email-h" maxlength="254">
+            <p class="hint bad" id="f-email-h" hidden></p>
+            <p class="hint" id="f-email-pm" hidden>Practice mode: nobody real is emailed. To see the result, use your PayPal test buyer's email here (developer.paypal.com, Apps &amp; Credentials, Sandbox, Accounts, the Personal account).</p>
+          </div>
+          <h3>What you charged for</h3>
+          <div id="items"></div>
+          <button type="button" class="btn sec" id="addrow">+ Add another item</button>
+          <div class="cols2">
+            <div class="field"><label for="f-cur">Currency</label><select id="f-cur"></select></div>
+            <div class="field"><label for="f-due">Payment due</label><select id="f-due"></select><p class="hint" id="duedate"></p></div>
+          </div>
+          <div class="total"><span>Total</span><strong id="total">0.00</strong></div>
+          <div class="field"><label for="f-note">Message to your client (optional)</label><textarea id="f-note" rows="3" maxlength="1000"></textarea><p class="hint">This is shown on the invoice your client receives.</p></div>
+        </fieldset>
+        <div id="rvact">
+          <div class="actions">
+            <button type="submit" class="btn" id="rvgo" disabled>Review and send</button>
+            <span class="reason" id="reason" aria-live="polite"></span>
+          </div>
+          <div class="actions">
+            <button type="button" class="linkbtn" id="editnote">Edit my note</button>
+            <button type="button" class="linkbtn" id="startover">Start over</button>
+          </div>
+        </div>
+        <div id="confirm" class="confirm" hidden role="group" aria-labelledby="cfh">
+          <h3 id="cfh" tabindex="-1" style="margin-top:0">Ready to send?</h3>
+          <p id="cftext"></p>
+          <p id="cfmode" class="mut"></p>
+          <div class="actions">
+            <button type="button" class="btn" id="cfyes">Yes, send it</button>
+            <button type="button" class="btn sec" id="cfno">Go back</button>
+          </div>
+          <div id="cferr" aria-live="polite"></div>
+        </div>
+      </form>
+    </section>
+
+    <!-- Step 3 -->
+    <section id="sent" class="okbox" hidden tabindex="-1" role="status" aria-live="polite"></section>
+
+    <!-- List -->
+    <section id="invoices" aria-labelledby="invh">
+      <h2 id="invh" style="margin-top:28px">Your invoices</h2>
+      <div class="toolbar">
+        <button type="button" class="btn sec" id="refresh">Refresh</button>
+        <span class="mut small" id="updated" aria-live="polite"></span>
+      </div>
+      <div id="lerr" aria-live="polite"></div>
+      <div id="list" aria-live="polite" aria-busy="false"></div>
+      <p class="mut small" id="listnote"></p>
+    </section>
+  </section>
+</main>
+
+<footer>
+  <p>Invoices are created with PayPal. Reminder wording is written by Claude; you always check it before it is sent.</p>
+  <p><button type="button" class="linkbtn" id="changekeys" hidden>Change my keys</button></p>
+</footer>
+
 <script>
-let cur=null;const $=id=>document.getElementById(id);
-const api=async(u,b)=>{const r=await fetch(u,b&&{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b)});
- const j=await r.json();if(!r.ok)throw new Error(j.detail||r.status);return j};
-const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-async function draft(){$('d').innerHTML='<p class=mut>Thinking…</p>';
- try{cur=await api('/api/draft',{text:$('t').value});
-  const tot=cur.items.reduce((a,i)=>a+i.qty*i.unit_price,0);
-  $('d').innerHTML=`<div class=card><b>${esc(cur.client_name)}</b> &lt;${esc(cur.client_email)}&gt; · due ${cur.due_days||'on receipt'}d<br>`+
-   cur.items.map(i=>`${esc(i.name)} — ${i.qty} × ${i.unit_price}`).join('<br>')+`<br><b>Total ${tot.toFixed(2)} ${esc(cur.currency||'USD')}</b>`+
-   (cur.missing?.length?`<p style=color:#c60>Missing: ${esc(cur.missing.join(', '))}</p>`:'')+
-   `<br><button onclick=send()>Send via PayPal</button></div>`}catch(e){$('d').textContent=e.message}}
-async function send(){try{const r=await api('/api/send',cur);$('d').innerHTML='<div class=card>Sent ✓ '+esc(r.id)+'</div>';load()}catch(e){alert(e.message)}}
-async function load(){try{const r=await api('/api/invoices');$('l').innerHTML=r.map(i=>`<div class=card><b>${esc(i.detail.invoice_number)}</b> ${esc(i.status)} · ${esc(i.amount?.value)} ${esc(i.amount?.currency_code)}
- <div class=mut>${esc(i.primary_recipients?.[0]?.billing_info?.email_address)}</div>
- ${['SENT','UNPAID','PARTIALLY_PAID'].includes(i.status)?`<button onclick="nudge('${esc(i.id)}')">AI reminder</button>`:''}<div id="n${esc(i.id)}"></div></div>`).join('')||'<p class=mut>None yet.</p>'}catch(e){$('l').textContent=e.message}}
-async function nudge(id){const el=$('n'+id);el.textContent='Writing…';
- try{const n=await api(`/api/invoices/${id}/draft-nudge`,{});
-  el.innerHTML=`<p class=mut>${n.days_overdue} days overdue</p><input id=s${id} value="${esc(n.subject)}"><textarea id=b${id} rows=4>${esc(n.note)}</textarea><button onclick="rem('${id}')">Send reminder</button>`}catch(e){el.textContent=e.message}}
-async function rem(id){try{await api(`/api/invoices/${id}/remind`,{subject:$('s'+id).value,note:$('b'+id).value});$('n'+id).textContent='Reminder sent ✓'}catch(e){alert(e.message)}}
-load();
+"use strict";
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const OFFLINE = "Can't reach the app. Is the window you started it from still open?";
+const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+const CURRENCIES = ['USD','EUR','GBP','CAD','AUD','NZD','JPY','CHF','SEK','NOK','DKK','SGD','HKD','MXN','BRL','INR','PLN','CZK','HUF','ILS','PHP','THB','TWD','MYR','CNY'];
+const ZERO = new Set(['JPY','HUF','TWD']);
+const MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const DOW = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+const DUE_CHOICES = [[0,'When they get it'],[7,'In 7 days'],[14,'In 14 days'],[30,'In 30 days'],[45,'In 45 days'],[60,'In 60 days']];
+const EXAMPLE = 'Fixed the website for Sam Lee (sam@example.com): 3 hours at $50. Payment due in 14 days.';
+
+let health = null, rv = null, lastList = null, listLoading = false, listTimer = 0;
+const panels = new Map();   // open reminder panels by invoice id
+const sentMap = new Map();  // reminders sent this session
+let panelCounter = 0;
+
+/* ---------- helpers ---------- */
+async function api(url, body) {
+  let r;
+  try {
+    r = await fetch(url, body === undefined ? undefined : {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify(body)});
+  } catch (e) { throw new Error(OFFLINE); }
+  let j = null;
+  try { j = await r.json(); } catch (e) { j = null; }
+  if (j === null || typeof j !== 'object') throw new Error(OFFLINE);
+  if (!r.ok) throw new Error(typeof j.message === 'string' && j.message ? j.message : 'Something went wrong. Please try again.');
+  return j;
+}
+function showError(el, msg, retry, extra) {
+  el.replaceChildren();
+  const box = document.createElement('div'); box.className = 'err'; box.setAttribute('role', 'alert');
+  const ic = document.createElement('span'); ic.className = 'ic'; ic.setAttribute('aria-hidden', 'true'); ic.textContent = '⚠';
+  const body = document.createElement('div');
+  const p = document.createElement('p'); p.textContent = msg + (extra ? ' ' + extra : '');
+  body.appendChild(p);
+  if (/Change my keys/.test(msg) && $('changekeys')) {
+    const k = document.createElement('button'); k.type = 'button'; k.className = 'btn'; k.textContent = 'Change my keys';
+    k.addEventListener('click', () => applyHealth(health, true)); body.appendChild(k);
+  }
+  if (retry) {
+    const b = document.createElement('button'); b.type = 'button'; b.className = 'btn sec'; b.textContent = 'Try again';
+    b.addEventListener('click', retry); body.appendChild(b);
+  }
+  box.append(ic, body); el.appendChild(box);
+}
+const clearEl = el => el.replaceChildren();
+// Disables a button and relabels it while its request runs.
+async function guarded(btn, label, fn) {
+  if (!btn || btn.disabled || btn.dataset.busy) return;
+  const old = btn.textContent;
+  btn.dataset.busy = '1'; btn.disabled = true; btn.textContent = label; btn.setAttribute('aria-busy', 'true');
+  try { return await fn(); }
+  finally {
+    delete btn.dataset.busy; btn.removeAttribute('aria-busy');
+    if (btn.isConnected) { btn.disabled = false; btn.textContent = old; }
+  }
+}
+function lsGet(k) { try { return localStorage.getItem(k) || ''; } catch (e) { return ''; } }
+function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+function uuid() {
+  try { return crypto.randomUUID(); } catch (e) { return 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10); }
+}
+function ymd(s) { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s || ''); return m ? new Date(+m[1], +m[2] - 1, +m[3]) : null; }
+function shortDate(s) { const d = typeof s === 'string' ? ymd(s) : s; return d ? MON[d.getMonth()] + ' ' + d.getDate() : ''; }
+function longDate(d) { return DOW[d.getDay()] + ' ' + d.getDate() + ' ' + MON[d.getMonth()] + ' ' + d.getFullYear(); }
+function plural(n, w) { return n + ' ' + w + (n === 1 ? '' : 's'); }
+function fmtMoney(amount, cur) {
+  const n = Number(amount);
+  if (!isFinite(n)) return String(amount ?? '');
+  const z = ZERO.has(cur);
+  try { return new Intl.NumberFormat(undefined, {style: 'currency', currency: cur, minimumFractionDigits: z ? 0 : 2, maximumFractionDigits: z ? 0 : 2}).format(n); }
+  catch (e) { return n.toFixed(z ? 0 : 2) + ' ' + cur; }
+}
+function safeUrl(u) { return typeof u === 'string' && /^https:\/\//i.test(u) ? u : ''; }
+function focusSoon(el) { setTimeout(() => { try { el.focus(); } catch (e) {} }, 30); }
+
+/* ---------- startup / setup ---------- */
+async function boot() {
+  clearEl($('booterr')); $('bootmsg').hidden = false;
+  try { health = await api('/api/health'); }
+  catch (e) { $('bootmsg').hidden = true; showError($('booterr'), e.message, boot); return; }
+  $('bootmsg').hidden = true;
+  applyHealth(health);
+}
+function applyHealth(h, manual) {
+  health = h;
+  $('changekeys').hidden = !h.ready;
+  if (!h.ready || manual) { showSetup(h, manual); return; }
+  $('setup').hidden = true; $('home').hidden = false;
+  const m = $('mode');
+  if (h.sandbox) {
+    m.className = 'banner'; m.hidden = false;
+    m.textContent = "Practice mode: invoices go to PayPal's test system. No real money moves and no real customers are emailed.";
+  } else {
+    m.className = 'banner live'; m.hidden = false;
+    m.textContent = 'Live mode: invoices are sent to real customers and real money moves.';
+  }
+  if (!lastList && !listLoading) loadInvoices();
+}
+function showSetup(h, manual) {
+  $('home').hidden = true; $('setup').hidden = false; $('mode').hidden = true;
+  $('pp-step').hidden = !manual && h.paypal_ready;
+  $('ai-step').hidden = !manual && h.anthropic_ready;
+  $('setupcancel').hidden = !manual;
+  $('setupnote').textContent = manual ? 'Leave a box empty to keep what you have now.' : (h.paypal_ready || h.anthropic_ready ? 'One more thing to connect.' : '');
+  clearEl($('setupmsg'));
+  focusSoon($('setuph'));
+  $('setuph').tabIndex = -1;
+}
+async function saveSetup() {
+  const body = {paypal_client_id: $('s-id').value.trim() || null, paypal_client_secret: $('s-secret').value.trim() || null, anthropic_api_key: $('s-key').value.trim() || null};
+  const box = $('setupmsg'); clearEl(box);
+  if (!body.paypal_client_id && !body.paypal_client_secret && !body.anthropic_api_key) {
+    showError(box, 'Paste at least one key first.'); return;
+  }
+  await guarded($('setupgo'), 'Checking...', async () => {
+    try {
+      const r = await api('/api/setup', body);
+      ['s-id', 's-secret', 's-key'].forEach(i => { $(i).value = ''; });
+      const ok = document.createElement('div'); ok.className = 'okbox'; ok.setAttribute('role', 'status');
+      ok.textContent = '✓ Connected';
+      box.replaceChildren(ok);
+      const h = await api('/api/health').catch(() => r);
+      setTimeout(() => applyHealth(h), 700);
+    } catch (e) { showError(box, e.message); }
+  });
+}
+
+/* ---------- step indicator ---------- */
+function setStep(n) {
+  document.querySelectorAll('#steps li').forEach(li => {
+    const s = +li.dataset.s;
+    li.classList.toggle('done', s < n);
+    if (s === n) li.setAttribute('aria-current', 'step'); else li.removeAttribute('aria-current');
+  });
+}
+
+/* ---------- step 1 ---------- */
+async function createDraft() {
+  const text = $('note').value.trim(), hint = $('notehint');
+  clearEl($('s1err')); hint.textContent = ''; hint.className = 'hint';
+  if (!text) { hint.textContent = 'Type or paste a few lines about the job first.'; hint.className = 'hint bad'; $('note').focus(); return; }
+  if (text.length > 4000) { hint.textContent = 'That note is too long. Try a shorter one.'; hint.className = 'hint bad'; $('note').focus(); return; }
+  $('prog').innerHTML = '<span class="spin" aria-hidden="true"></span>Reading your note... this takes a few seconds';
+  await guarded($('make'), 'Reading...', async () => {
+    try { startReview(await api('/api/draft', {text})); }
+    catch (e) { showError($('s1err'), e.message, () => createDraft()); }
+    finally { clearEl($('prog')); }
+  });
+}
+
+/* ---------- step 2 ---------- */
+function startReview(d) {
+  const cur = CURRENCIES.includes(String(d.currency || '').toUpperCase()) ? String(d.currency).toUpperCase() : 'USD';
+  const items = (Array.isArray(d.items) ? d.items : []).map(i => ({name: String(i.name ?? ''), qty: i.qty == null ? '1' : String(i.qty), price: i.unit_price == null ? '' : String(i.unit_price)}));
+  if (!items.length) items.push({name: '', qty: '1', price: ''});
+  const due = Number.isInteger(d.due_days) && d.due_days > 0 ? d.due_days : 0;
+  rv = {rid: uuid(), name: String(d.client_name || ''), email: String(d.client_email || '').trim(), cur, items, due, note: String(d.note || ''), emailFlag: false, confirming: false, snap: null};
+  rv.emailFlag = !EMAIL_RE.test(rv.email);
+  const q = (Array.isArray(d.questions) ? d.questions : []).filter(x => typeof x === 'string' && x.trim());
+  const qb = $('qbox');
+  if (q.length) {
+    qb.innerHTML = '<div class="warnbox" role="note"><h3><span aria-hidden="true">⚠</span><span>Check these before sending</span></h3><ul>' + q.map(x => '<li>' + esc(x) + '</li>').join('') + '</ul></div>';
+  } else qb.innerHTML = '';
+  $('f-name').value = rv.name; $('f-email').value = rv.email; $('f-note').value = rv.note;
+  $('f-cur').innerHTML = CURRENCIES.map(c => '<option>' + c + '</option>').join(''); $('f-cur').value = cur;
+  const choices = DUE_CHOICES.slice();
+  if (due && !choices.some(c => c[0] === due)) { choices.push([due, 'In ' + due + ' days']); choices.sort((a, b) => a[0] - b[0]); }
+  $('f-due').innerHTML = choices.map(c => '<option value="' + c[0] + '">' + esc(c[1]) + '</option>').join(''); $('f-due').value = String(due);
+  clearEl($('cferr')); $('confirm').hidden = true; $('rvact').hidden = false; $('rvfs').disabled = false;
+  renderItems(); updateReview();
+  $('s1').hidden = true; $('sent').hidden = true; $('review').hidden = false;
+  setStep(2);
+  if (rv.emailFlag && !rv.email) focusSoon($('f-email')); else focusSoon($('rvh'));
+  $('review').scrollIntoView({block: 'start'});
+}
+function renderItems() {
+  $('items').innerHTML = rv.items.map((it, i) => `
+    <div class="item" data-i="${i}">
+      <div class="field c-name"><label for="in-${i}">What you did</label><input id="in-${i}" data-f="name" value="${esc(it.name)}" autocomplete="off" maxlength="200"></div>
+      <div class="field"><label for="iq-${i}">How many</label><input id="iq-${i}" data-f="qty" type="number" inputmode="decimal" step="any" min="0" value="${esc(it.qty)}"></div>
+      <div class="field"><label for="ip-${i}">Price each</label><input id="ip-${i}" data-f="price" type="number" inputmode="decimal" step="any" min="0" value="${esc(it.price)}"></div>
+      <div class="c-end">
+        <div class="lt-wrap"><span class="lbl">Line total</span><span class="lt" aria-live="off"></span></div>
+        <button type="button" class="btn sec" data-rm="${i}" aria-label="Remove item ${i + 1}">Remove</button>
+      </div>
+    </div>`).join('');
+  rv.items.forEach((_, i) => updateLine(i));
+}
+function toNum(s) { s = String(s ?? '').trim(); if (s === '') return null; const n = Number(s); return isFinite(n) ? n : NaN; }
+function decimalsOf(s) { const m = String(s).trim().match(/\.(\d+)/); return m ? m[1].replace(/0+$/, '').length : 0; }
+function scaleOf() { return ZERO.has(rv.cur) ? 1 : 100; }
+function lineCents(it) {
+  const q = toNum(it.qty), p = toNum(it.price);
+  if (q === null || p === null || isNaN(q) || isNaN(p) || q <= 0 || p <= 0) return 0;
+  return Math.round(q * Math.round(p * scaleOf()));
+}
+function moneyC(cents) { return fmtMoney(cents / scaleOf(), rv.cur); }
+function updateLine(i) {
+  const row = $('items').querySelector('.item[data-i="' + i + '"] .lt');
+  if (row) { const c = lineCents(rv.items[i]); row.textContent = c ? moneyC(c) : '–'; }
+}
+function analyse() {
+  let used = 0, bad = null, cents = 0;
+  for (const it of rv.items) {
+    const q = toNum(it.qty), p = toNum(it.price), nm = it.name.trim();
+    if (!nm && (p === null || p === 0) && (q === null || q === 1 || q === 0)) continue; // untouched blank row
+    if (!nm) { bad = bad || 'Give every item a name, or remove it'; continue; }
+    if (p === null || isNaN(p) || p <= 0) { bad = bad || 'Add a price above zero'; continue; }
+    if (q === null || isNaN(q) || q <= 0) { bad = bad || 'Add how many (more than zero)'; continue; }
+    if (decimalsOf(it.price) > (ZERO.has(rv.cur) ? 0 : 2)) { bad = bad || (ZERO.has(rv.cur) ? rv.cur + ' prices must be whole numbers' : 'Prices can have at most two decimal places'); continue; }
+    used++; cents += lineCents(it);
+  }
+  return {used, bad, cents};
+}
+function updateReview() {
+  const a = analyse();
+  $('total').textContent = moneyC(a.cents);
+  const email = rv.email;
+  const emailOk = EMAIL_RE.test(email);
+  const h = $('f-email-h');
+  $('f-email-pm').hidden = !(health && health.sandbox);
+  if (rv.emailFlag && !emailOk) {
+    h.hidden = false;
+    h.textContent = email ? "That email address doesn't look right" : 'We need an email address so PayPal knows where to send this';
+    $('f-email').setAttribute('aria-invalid', 'true');
+  } else { h.hidden = true; $('f-email').removeAttribute('aria-invalid'); }
+  let reason = '';
+  if (!rv.name.trim()) reason = 'Add who this is for';
+  else if (!email) reason = 'Add an email address';
+  else if (!emailOk) reason = 'Fix the email address';
+  else if (a.used === 0) reason = a.bad || 'Add a price above zero';
+  else if (a.bad) reason = a.bad;
+  else if (a.cents / scaleOf() > 1000000) reason = 'The total is too large';
+  $('reason').textContent = reason;
+  $('rvgo').disabled = !!reason;
+  const d = new Date(); d.setDate(d.getDate() + rv.due);
+  $('duedate').textContent = rv.due ? 'Due ' + longDate(d) : 'Due as soon as they get it';
+}
+function dueText() { const d = new Date(); d.setDate(d.getDate() + rv.due); return rv.due ? 'Due ' + longDate(d) + '.' : 'Due as soon as they get it.'; }
+function openConfirm() {
+  updateReview(); if ($('rvgo').disabled) return;
+  const a = analyse();
+  rv.snap = {name: rv.name.trim(), email: rv.email, cur: rv.cur, cents: a.cents, due: rv.due};
+  $('cftext').textContent = 'This will email an invoice for ' + moneyC(a.cents) + ' to ' + rv.email + '. ' + dueText();
+  $('cfmode').textContent = health && health.sandbox ? 'Practice mode: no real money moves and no real customers are emailed.' : 'This is live mode: your client will get a real invoice.';
+  clearEl($('cferr'));
+  $('rvfs').disabled = true; $('rvact').hidden = true; $('confirm').hidden = false; rv.confirming = true;
+  focusSoon($('cfh'));
+}
+function closeConfirm() {
+  $('confirm').hidden = true; $('rvact').hidden = false; $('rvfs').disabled = false; rv.confirming = false;
+  clearEl($('cferr')); updateReview(); focusSoon($('rvgo').disabled ? $('f-name') : $('rvgo'));
+}
+async function doSend() {
+  const used = rv.items.filter(it => it.name.trim() && toNum(it.price) > 0 && toNum(it.qty) > 0);
+  const body = {
+    client_name: rv.name.trim(), client_email: rv.email.trim(), currency: rv.cur, due_days: rv.due, note: rv.note.trim(),
+    items: used.map(it => ({name: it.name.trim(), qty: Number(it.qty), unit_price: Number(it.price)})), request_id: rv.rid
+  };
+  const snap = rv.snap;
+  clearEl($('cferr'));
+  await guarded($('cfyes'), 'Sending...', async () => {
+    $('cfno').disabled = true;
+    try {
+      const r = await api('/api/send', body);
+      showSent(r, snap);
+    } catch (e) {
+      showError($('cferr'), e.message, () => doSend(), 'Nothing was sent.');
+    } finally { $('cfno').disabled = false; }
+  });
+}
+function showSent(r, snap) {
+  const due = r.due_date ? "It's due " + shortDate(r.due_date) : "It's due as soon as they get it";
+  const link = safeUrl(r.view_url);
+  const sent = $('sent');
+  const practice = !!(health && health.sandbox);
+  const what = practice
+    ? '<h2>✓ Practice invoice created</h2><p>Practice invoice for ' + esc(r.client_name || snap.name) + ' (' + esc(snap.email) + '). Nobody real was emailed. In practice mode only the PayPal test buyer account can see it' + (link ? ', and the View invoice button below opens it.' : '.') + ' '
+    : '<h2>✓ Invoice sent</h2><p>Invoice sent to ' + esc(r.client_name || snap.name) + ' (' + esc(snap.email) + '). PayPal has emailed it with a button to pay by card or PayPal. ';
+  sent.innerHTML = what + esc(due) + ' and will appear below as Waiting for payment.</p>' +
+    '<div class="actions">' + (link ? '<a class="btn sec" href="' + esc(link) + '" target="_blank" rel="noopener">View invoice</a>' : '') + '<button type="button" class="btn" id="another">Create another invoice</button></div>';
+  $('another').addEventListener('click', resetAll);
+  $('review').hidden = true; sent.hidden = false; setStep(3);
+  rv = null;
+  sent.focus(); sent.scrollIntoView({block: 'start'});
+  loadInvoices();
+}
+function resetAll() {
+  rv = null; $('note').value = ''; $('notehint').textContent = ''; clearEl($('s1err'));
+  $('review').hidden = true; $('sent').hidden = true; $('s1').hidden = false; setStep(1);
+  $('note').focus(); window.scrollTo({top: 0});
+}
+function backToNote() {
+  $('review').hidden = true; $('s1').hidden = false; setStep(1); $('note').focus();
+}
+
+/* ---------- invoice list ---------- */
+const KIND_ICON = {waiting: '◷', overdue: '⚠', partial: '◑', paid: '✓', draft: '✎', cancelled: '✕', refunded: '↩', other: '?'};
+function dueLine(inv) {
+  if (['paid', 'cancelled', 'refunded', 'draft'].includes(inv.kind)) return '';
+  const d = inv.days_to_due;
+  if (!inv.due_date || d == null) return 'Due on receipt';
+  if (d < 0) return 'Overdue by ' + plural(-d, 'day') + ' (was due ' + shortDate(inv.due_date) + ')';
+  if (d === 0) return 'Due today (' + shortDate(inv.due_date) + ')';
+  return 'Due in ' + plural(d, 'day') + ' (' + shortDate(inv.due_date) + ')';
+}
+function sentText(s) {
+  const m = Math.floor((Date.now() - s.at) / 60000);
+  const when = m < 1 ? 'just now' : m < 60 ? plural(m, 'minute') + ' ago' : 'earlier';
+  return '✓ Reminder emailed to ' + s.email + ' ' + when + '.';
+}
+function cardHtml(inv) {
+  const kind = KIND_ICON[inv.kind] ? inv.kind : 'other';
+  const partial = kind === 'partial';
+  const amt = partial ? fmtMoney(inv.amount_due, inv.currency) + ' still owed' : fmtMoney(inv.total, inv.currency);
+  const dl = dueLine(inv), link = safeUrl(inv.view_url), id = esc(inv.id);
+  const open = panels.has(inv.id), s = sentMap.get(inv.id);
+  return `<article class="inv" data-card="${id}">
+    <div class="inv-top"><strong class="client">${esc(inv.client_name || 'Unnamed client')}</strong>
+      <span class="pill k-${kind}"><span aria-hidden="true">${KIND_ICON[kind]}</span><span>${esc(inv.label || 'Needs attention')}</span></span></div>
+    <div class="amt">${esc(amt)}${partial ? ' <span class="mut small" style="font-weight:400">of ' + esc(fmtMoney(inv.total, inv.currency)) + '</span>' : ''}</div>
+    <div class="meta">${dl ? '<span>' + esc(dl) + '</span>' : ''}${inv.number ? '<span class="mut small">Invoice ' + esc(inv.number) + '</span>' : ''}</div>
+    <div class="actions">${link ? '<a class="btn sec" href="' + esc(link) + '" target="_blank" rel="noopener">View invoice</a>' : ''}${inv.can_remind ? '<button type="button" class="btn sec" data-act="remind" data-id="' + id + '"' + (open ? ' hidden' : '') + '>Write a reminder</button>' : ''}</div>
+    <p class="mut small" role="status" data-sent="${id}">${s ? esc(sentText(s)) : ''}</p>
+    <div class="nudge" data-slot="${id}"></div>
+  </article>`;
+}
+function renderList() {
+  const r = lastList, list = $('list');
+  const invs = Array.isArray(r.invoices) ? r.invoices : [];
+  const keepNodes = new Map();
+  panels.forEach((st, id) => { if (st.node) keepNodes.set(id, st.node); });
+  if (!invs.length) {
+    list.innerHTML = '<p class="mut">No invoices yet. Describe your first job above and it will show up here.</p>';
+  } else {
+    const closedKinds = ['paid', 'cancelled', 'refunded'];
+    const need = invs.filter(i => !closedKinds.includes(i.kind)), done = invs.filter(i => closedKinds.includes(i.kind));
+    list.innerHTML =
+      (need.length ? '<div class="group"><h3>Needs your attention</h3>' + need.map(cardHtml).join('') + '</div>' : '') +
+      (done.length ? '<div class="group"><h3>Paid and closed</h3>' + done.map(cardHtml).join('') + '</div>' : '');
+  }
+  const known = new Set(invs.map(i => i.id));
+  keepNodes.forEach((node, id) => {
+    if (!known.has(id)) { panels.delete(id); return; }
+    const slot = list.querySelector('[data-slot="' + CSS.escape(id) + '"]');
+    if (slot) slot.appendChild(node);
+  });
+  const shown = invs.length, total = Number(r.total) || shown;
+  $('listnote').textContent = total > shown ? 'Showing your ' + shown + ' most recent invoices.' : '';
+  $('updated').textContent = 'Last updated ' + new Date().toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+}
+async function loadInvoices() {
+  if (listLoading) return;
+  listLoading = true; $('list').setAttribute('aria-busy', 'true');
+  clearEl($('lerr'));
+  if (!lastList) $('list').innerHTML = '<p class="mut"><span class="spin" aria-hidden="true"></span>Loading your invoices...</p>';
+  try { lastList = await api('/api/invoices'); renderList(); }
+  catch (e) {
+    showError($('lerr'), e.message, () => loadInvoices());
+    if (!lastList) clearEl($('list'));
+  } finally { listLoading = false; $('list').setAttribute('aria-busy', 'false'); }
+}
+
+/* ---------- reminders ---------- */
+function openPanel(id) {
+  if (panels.has(id)) return;
+  const node = document.createElement('div'); node.dataset.id = id;
+  const st = {n: ++panelCounter, id, node, status: 'loading', sender: lsGet('ia_sender'), subject: '', note: '', tone: null, d: null, err: '', first: true};
+  panels.set(id, st);
+  const card = $('list').querySelector('[data-slot="' + CSS.escape(id) + '"]');
+  if (card) card.appendChild(node);
+  const b = $('list').querySelector('[data-act="remind"][data-id="' + CSS.escape(id) + '"]'); if (b) b.hidden = true;
+  renderPanel(st); fetchNudge(st);
+}
+function closePanel(id) {
+  const st = panels.get(id); if (!st) return;
+  st.node.remove(); panels.delete(id);
+  const b = $('list').querySelector('[data-act="remind"][data-id="' + CSS.escape(id) + '"]');
+  if (b) { b.hidden = false; b.focus(); }
+}
+async function fetchNudge(st, tone) {
+  st.status = 'loading'; renderPanel(st);
+  try {
+    const body = {sender_name: st.sender.trim() || null}; if (tone) body.tone = tone;
+    const d = await api('/api/invoices/' + encodeURIComponent(st.id) + '/draft-nudge', body);
+    if (panels.get(st.id) !== st) return;
+    st.d = d; st.subject = d.subject || ''; st.note = d.note || ''; st.tone = d.tone || 'friendly'; st.status = 'ready';
+    renderPanel(st);
+    if (st.first) { st.first = false; const s = st.node.querySelector('[data-nf="subject"]'); if (s) s.focus(); }
+  } catch (e) {
+    if (panels.get(st.id) !== st) return;
+    st.status = 'error'; st.err = e.message; renderPanel(st);
+  }
+}
+function renderPanel(st) {
+  const n = st.n;
+  if (st.status === 'loading') {
+    st.node.innerHTML = '<div class="panel" role="status"><span class="spin" aria-hidden="true"></span>Writing a reminder... this takes a few seconds</div>';
+    return;
+  }
+  if (st.status === 'error') {
+    st.node.innerHTML = '<div class="panel"><div class="nerr"></div><div class="actions"><button type="button" class="btn sec" data-act="ncancel">Cancel</button></div></div>';
+    showError(st.node.querySelector('.nerr'), st.err, () => fetchNudge(st));
+    return;
+  }
+  const d = st.d, over = d.is_overdue && d.days_overdue > 0;
+  const helper = over ? 'Overdue by ' + plural(d.days_overdue, 'day') + '. Edit anything you like, then send.'
+    : (d.due_date ? 'Not due until ' + shortDate(d.due_date) + '. You can still send a friendly heads-up.' : 'Edit anything you like, then send.');
+  const tones = [['friendly', 'Friendly'], ['neutral', 'Neutral'], ['firm', 'Firm']];
+  const who = d.client_name || 'your client';
+  st.node.innerHTML = `<div class="panel">
+    <h4>Reminder email to ${esc(who)}${d.client_email ? ' (' + esc(d.client_email) + ')' : ''}</h4>
+    <p class="mut">${esc(helper)}</p>
+    <div class="cols2">
+      ${over ? `<div class="field"><label for="nt-${n}">Tone</label><select id="nt-${n}" data-nf="tone">${tones.map(t => '<option value="' + t[0] + '"' + (t[0] === st.tone ? ' selected' : '') + '>' + t[1] + '</option>').join('')}</select><p class="hint">Changing the tone writes a new message and replaces your edits.</p></div>` : ''}
+      <div class="field"><label for="nn-${n}">Your name or business</label><input id="nn-${n}" data-nf="sender" value="${esc(st.sender)}" maxlength="80" autocomplete="off"><p class="hint">Used to sign the message. <button type="button" class="linkbtn" data-act="nredo" style="min-height:0;padding:0">Write it again</button> to apply.</p></div>
+    </div>
+    <div class="field"><label for="ns-${n}">Email subject</label><input id="ns-${n}" data-nf="subject" value="${esc(st.subject)}" maxlength="200"></div>
+    <div class="field"><label for="nb-${n}">Message</label><textarea id="nb-${n}" data-nf="note" rows="6" maxlength="1000">${esc(st.note)}</textarea></div>
+    <div class="actions">
+      <button type="button" class="btn" data-act="nsend">Send reminder</button>
+      <button type="button" class="btn sec" data-act="ncancel">Cancel</button>
+      <span class="mut small">This will email ${esc(d.client_email || 'your client')}.</span>
+    </div>
+    <div class="nerr" aria-live="polite"></div>
+  </div>`;
+}
+async function sendNudge(st, btn) {
+  const err = st.node.querySelector('.nerr'); clearEl(err);
+  if (!st.subject.trim() || !st.note.trim()) { showError(err, 'Write a subject and a message first.'); return; }
+  await guarded(btn, 'Sending...', async () => {
+    try {
+      const r = await api('/api/invoices/' + encodeURIComponent(st.id) + '/remind', {subject: st.subject.trim(), note: st.note.trim()});
+      sentMap.set(st.id, {email: r.client_email || (st.d && st.d.client_email) || 'your client', at: Date.now()});
+      const id = st.id; closePanel(id);
+      const p = $('list').querySelector('[data-sent="' + CSS.escape(id) + '"]'); if (p) p.textContent = sentText(sentMap.get(id));
+    } catch (e) { showError(err, e.message, () => sendNudge(st, st.node.querySelector('[data-act="nsend"]')), 'Nothing was sent.'); }
+  });
+}
+
+/* ---------- events ---------- */
+$('make').addEventListener('click', createDraft);
+$('example').addEventListener('click', () => { $('note').value = EXAMPLE; $('notehint').textContent = ''; $('note').focus(); });
+$('note').addEventListener('input', () => { $('notehint').textContent = ''; $('notehint').className = 'hint'; });
+$('refresh').addEventListener('click', () => guarded($('refresh'), 'Refreshing...', loadInvoices));
+$('editnote').addEventListener('click', backToNote);
+$('startover').addEventListener('click', resetAll);
+$('addrow').addEventListener('click', () => {
+  rv.items.push({name: '', qty: '1', price: ''}); renderItems(); updateReview();
+  focusSoon($('in-' + (rv.items.length - 1)));
+});
+$('items').addEventListener('input', e => {
+  const t = e.target, row = t.closest('.item'); if (!row || !t.dataset.f) return;
+  const i = +row.dataset.i; rv.items[i][t.dataset.f] = t.value; updateLine(i); updateReview();
+});
+$('items').addEventListener('click', e => {
+  const b = e.target.closest('[data-rm]'); if (!b) return;
+  rv.items.splice(+b.dataset.rm, 1);
+  if (!rv.items.length) rv.items.push({name: '', qty: '1', price: ''});
+  renderItems(); updateReview(); focusSoon($('addrow'));
+});
+$('f-name').addEventListener('input', e => { rv.name = e.target.value; updateReview(); });
+$('f-email').addEventListener('input', e => { rv.email = e.target.value.trim(); if (EMAIL_RE.test(rv.email)) rv.emailFlag = false; updateReview(); });
+$('f-email').addEventListener('blur', () => { if (!EMAIL_RE.test(rv.email)) { rv.emailFlag = true; updateReview(); } });
+$('f-cur').addEventListener('change', e => { rv.cur = e.target.value; renderItems(); updateReview(); });
+$('f-due').addEventListener('change', e => { rv.due = +e.target.value; updateReview(); });
+$('f-note').addEventListener('input', e => { rv.note = e.target.value; });
+$('rvform').addEventListener('submit', e => { e.preventDefault(); if (!rv.confirming) openConfirm(); });
+$('cfno').addEventListener('click', closeConfirm);
+$('cfyes').addEventListener('click', doSend);
+$('setupform').addEventListener('submit', e => { e.preventDefault(); saveSetup(); });
+$('changekeys').addEventListener('click', () => applyHealth(health, true));
+$('setupcancel').addEventListener('click', () => applyHealth(health));
+
+const listEl = $('list');
+listEl.addEventListener('click', e => {
+  const b = e.target.closest('[data-act]'); if (!b) return;
+  const act = b.dataset.act;
+  if (act === 'remind') return openPanel(b.dataset.id);
+  const node = b.closest('[data-id]'); const st = node && panels.get(node.dataset.id); if (!st) return;
+  if (act === 'ncancel') closePanel(st.id);
+  else if (act === 'nredo') fetchNudge(st, st.tone && st.d && st.d.is_overdue ? st.tone : undefined);
+  else if (act === 'nsend') sendNudge(st, b);
+});
+listEl.addEventListener('input', e => {
+  const t = e.target, f = t.dataset && t.dataset.nf; if (!f) return;
+  const node = t.closest('[data-id]'); const st = node && panels.get(node.dataset.id); if (!st) return;
+  if (f === 'subject') st.subject = t.value;
+  else if (f === 'note') st.note = t.value;
+  else if (f === 'sender') { st.sender = t.value; lsSet('ia_sender', t.value.trim()); }
+});
+listEl.addEventListener('change', e => {
+  const t = e.target; if (!t.dataset || t.dataset.nf !== 'tone') return;
+  const node = t.closest('[data-id]'); const st = node && panels.get(node.dataset.id); if (st) fetchNudge(st, t.value);
+});
+
+boot();
 </script>
+</body>
+</html>
