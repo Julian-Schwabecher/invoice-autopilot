@@ -37,9 +37,9 @@ INVOICE_TOOL = {
 def draft_from_text(text: str) -> dict:
     r = client().messages.create(
         model=MODEL, max_tokens=1024, tools=[INVOICE_TOOL],
-        tool_choice={"type": "tool", "name": "draft_invoice"},
+        tool_choice={"type": "auto"},
         messages=[{"role": "user", "content":
-                   "Extract an invoice from this freelancer's note. Do not invent an email "
+                   "Call the draft_invoice tool with an invoice extracted from this freelancer's note. Do not invent an email "
                    "address or prices; list anything absent under `missing`.\n\n" + text}])
     return next(b.input for b in r.content if b.type == "tool_use")
 
